@@ -52,7 +52,7 @@ pip
 Install & Run:
 
 ```bash
-cd backend
+cd chatbot_backend
 python -m venv venv
 ```
 
