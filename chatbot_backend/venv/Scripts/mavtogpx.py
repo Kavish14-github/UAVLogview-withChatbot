@@ -1,4 +1,4 @@
-#!C:\Users\Kavish\chatbot_backend\venv\Scripts\python.exe
+#!C:\Users\Kavish\UAVLogview-withChatbot\chatbot_backend\venv\Scripts\python.exe
 
 '''
 example program to extract GPS data from a mavlink log, and create a GPX

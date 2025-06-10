@@ -19,17 +19,11 @@ from pymavlink import mavexpression
 # We want to re-export x25crc here
 from pymavlink.generator.mavcrc import x25crc as x25crc
 
-is_py3 = sys.version_info >= (3,0)
-supports_type_annotations = sys.version_info >= (3,6)
-
 # adding these extra imports allows pymavlink to be used directly with pyinstaller
 # without having complex spec files. To allow for installs that don't have ardupilotmega
 # at all we avoid throwing an exception if it isn't installed
 try:
-    if supports_type_annotations:
-        from pymavlink.dialects.v10 import ardupilotmega
-    else:
-        from pymavlink.dialects.v10.python2 import ardupilotmega
+    from pymavlink.dialects.v10 import ardupilotmega
 except Exception:
     pass
 
@@ -76,9 +70,7 @@ def evaluate_condition(condition, vars):
     return v
 
 def u_ord(c):
-    if is_py3:
-        return c
-    return ord(c)
+    return c
 
 class location(object):
     '''represent a GPS coordinate'''
@@ -117,26 +109,25 @@ def set_dialect(dialect, with_type_annotations=None):
     global mavlink, current_dialect
     from .generator import mavparse
 
-    if with_type_annotations is None:
-        with_type_annotations = supports_type_annotations
+    if with_type_annotations is not None:
+        print("with_type_annotations ignored; remove parameter")
 
-    legacy_python_module = "python2." if not with_type_annotations else ""
     if 'MAVLINK20' in os.environ:
         wire_protocol = mavparse.PROTOCOL_2_0
-        modname = "pymavlink.dialects.v20." + legacy_python_module + dialect
+        modname = "pymavlink.dialects.v20." + dialect
     elif mavlink is None or mavlink.WIRE_PROTOCOL_VERSION == "1.0" or not 'MAVLINK09' in os.environ:
         wire_protocol = mavparse.PROTOCOL_1_0
-        modname = "pymavlink.dialects.v10." + legacy_python_module + dialect
+        modname = "pymavlink.dialects.v10." + dialect
     else:
         wire_protocol = mavparse.PROTOCOL_0_9
-        modname = "pymavlink.dialects.v09." + legacy_python_module + dialect
+        modname = "pymavlink.dialects.v09." + dialect
 
     try:
         mod = __import__(modname)
     except Exception:
         # auto-generate the dialect module
         from .generator.mavgen import mavgen_python_dialect
-        mavgen_python_dialect(dialect, wire_protocol, with_type_annotations=with_type_annotations)
+        mavgen_python_dialect(dialect, wire_protocol)
         mod = __import__(modname)
     components = modname.split('.')
     for comp in components[1:]:
@@ -159,10 +150,22 @@ class mavfile_state(object):
         self.armed = False # canonical arm state for the vehicle as a whole
 
         if float(mavlink.WIRE_PROTOCOL_VERSION) >= 1:
-            self.messages['HOME'] = mavlink.MAVLink_gps_raw_int_message(0,0,0,0,0,0,0,0,0,0)
-            mavlink.MAVLink_waypoint_message = mavlink.MAVLink_mission_item_message
+            try:
+                self.messages['HOME'] = mavlink.MAVLink_gps_raw_int_message(0,0,0,0,0,0,0,0,0,0)
+            except AttributeError:
+                # may be using a minimal dialect
+                pass
+            try:
+                mavlink.MAVLink_waypoint_message = mavlink.MAVLink_mission_item_message
+            except AttributeError:
+                # may be using a minimal dialect
+                pass
         else:
-            self.messages['HOME'] = mavlink.MAVLink_gps_raw_message(0,0,0,0,0,0,0,0,0)
+            try:
+                self.messages['HOME'] = mavlink.MAVLink_gps_raw_message(0,0,0,0,0,0,0,0,0)
+            except AttributeError:
+                # may be using a minimal dialect
+                pass
 
 class param_state(object):
     '''state for a particular system id/component id pair'''
@@ -283,7 +286,6 @@ class mavfile(object):
     
     def auto_mavlink_version(self, buf):
         '''auto-switch mavlink protocol version'''
-        global mavlink
         if len(buf) == 0:
             return
         try:
@@ -420,9 +422,7 @@ class mavfile(object):
                 # lock onto id tuple of first vehicle heartbeat
                 self.sysid = src_system
             if float(mavlink.WIRE_PROTOCOL_VERSION) >= 1:
-                self.flightmode = mode_string_v10(msg)
-                self.mav_type = msg.type
-                self.base_mode = msg.base_mode
+                self.sysid_state[src_system].flightmode = mode_string_v10(msg)
                 self.sysid_state[src_system].armed = (msg.base_mode & mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
                 self.sysid_state[src_system].mav_type = msg.type
                 self.sysid_state[src_system].mav_autopilot = msg.autopilot
@@ -430,11 +430,10 @@ class mavfile(object):
             if self.sysid == 0:
                 # lock onto id tuple of first vehicle heartbeat
                 self.sysid = src_system
-            self.flightmode = mode_string_v10(msg)
-            self.mav_type = msg.type
             if msg.autopilot == mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA:
-                self.base_mode = msg.custom0
+                self.sysid_state[src_system].base_mode = msg.custom0
                 self.sysid_state[src_system].armed = (msg.custom0 & mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+            self.sysid_state[src_system].flightmode = mode_string_v10(msg)
             self.sysid_state[src_system].mav_type = msg.type
             self.sysid_state[src_system].mav_autopilot = msg.autopilot
 
@@ -443,7 +442,7 @@ class mavfile(object):
                 self.param_state[src_tuple] = param_state()
             self.param_state[src_tuple].params[msg.param_id] = msg.param_value
         elif type == 'SYS_STATUS' and mavlink.WIRE_PROTOCOL_VERSION == '0.9':
-            self.flightmode = mode_string_v09(msg)
+            self.sysid_state[src_system].flightmode = mode_string_v09(msg)
         elif type == 'GPS_RAW':
             if self.sysid_state[src_system].messages['HOME'].fix_type < 2:
                 self.sysid_state[src_system].messages['HOME'] = msg
@@ -479,10 +478,7 @@ class mavfile(object):
 
             if numnew != 0:
                 if self.logfile_raw:
-                    if is_py3:
-                        self.logfile_raw.write(s)
-                    else:
-                        self.logfile_raw.write(str(s))
+                    self.logfile_raw.write(s)
                 if self.first_byte:
                     self.auto_mavlink_version(s)
 
@@ -492,10 +488,7 @@ class mavfile(object):
             if msg:
                 if self.logfile and  msg.get_type() != 'BAD_DATA' :
                     usec = int(time.time() * 1.0e6) & ~3
-                    if is_py3:
-                        self.logfile.write(struct.pack('>Q', usec) + msg.get_msgbuf())
-                    else:
-                        self.logfile.write(str(struct.pack('>Q', usec) + msg.get_msgbuf()))
+                    self.logfile.write(struct.pack('>Q', usec) + msg.get_msgbuf())
                 self.post_message(msg)
                 return msg
             else:
@@ -572,7 +565,7 @@ class mavfile(object):
             idx = int(name)
             self.mav.param_request_read_send(self.target_system, self.target_component, b"", idx)
         except Exception:
-            if sys.version_info.major >= 3 and not isinstance(name, bytes):
+            if not isinstance(name, bytes):
                 name = bytes(name,'ascii')
             self.mav.param_request_read_send(self.target_system, self.target_component, name, -1)
 
@@ -1986,7 +1979,6 @@ except:
 
 def is_printable(c):
     '''see if a character is printable'''
-    global have_ascii
     if have_ascii:
         return ascii.isprint(c)
     if isinstance(c, int):

@@ -1,4 +1,4 @@
-#!C:\Users\Kavish\chatbot_backend\venv\Scripts\python.exe
+#!C:\Users\Kavish\UAVLogview-withChatbot\chatbot_backend\venv\Scripts\python.exe
 
 '''
 parse a MAVLink protocol XML file and generate a python implementation

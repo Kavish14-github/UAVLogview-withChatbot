@@ -1,4 +1,4 @@
-#!C:\Users\Kavish\chatbot_backend\venv\Scripts\python.exe
+#!C:\Users\Kavish\UAVLogview-withChatbot\chatbot_backend\venv\Scripts\python.exe
 
 '''
 extract one mode type from a log

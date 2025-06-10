@@ -1,0 +1,45 @@
+# ========== Node / Vue ==========
+node_modules/
+dist/
+.env.local
+.env.production
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ========== Python / FastAPI ==========
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.env
+.env.*
+
+# ========== OS / Editor ==========
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.bak
+.idea/
+.vscode/
+
+# ========== Logs / Temp ==========
+*.log
+*.tmp
+
+# ========== Test Artifacts ==========
+coverage/
+*.cover
+*.coverage
+*.py,cover
+htmlcov/
+.cache/
+.mypy_cache/
+.pytest_cache/

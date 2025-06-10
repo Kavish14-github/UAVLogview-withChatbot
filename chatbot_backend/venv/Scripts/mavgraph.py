@@ -1,4 +1,4 @@
-#!C:\Users\Kavish\chatbot_backend\venv\Scripts\python.exe
+#!C:\Users\Kavish\UAVLogview-withChatbot\chatbot_backend\venv\Scripts\python.exe
 '''
 graph a MAVLink log file
 Andrew Tridgell August 2011
@@ -20,10 +20,7 @@ try:
 except:
     print("WARNING: Numpy missing, mathematical notation will not be supported.")
 
-if sys.version_info[0] >= 3:
-    text_types = frozenset([str,])
-else:
-    text_types = frozenset([unicode, str])
+text_types = frozenset([str,])
 
 # cope with rename of raw_input in python3
 try:
