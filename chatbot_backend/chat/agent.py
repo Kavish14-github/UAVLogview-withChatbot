@@ -1,163 +1,261 @@
 import openai
 import os
 import json
+import faiss
+import numpy as np
+import time
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
+EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_DIM = 1536
+
 SYSTEM_PROMPT = """
-You are an expert UAV flight log analyst working with telemetry data extracted from ArduPilot .bin logs.
+You are an expert UAV flight log analyst with deep expertise in ArduPilot systems and flight safety. Your analysis should rely on contextual reasoning using telemetry trends, flight dynamics, and system behavior, guided by the official ArduPilot documentation (https://ardupilot.org/plane/docs/logmessages.html).
 
 You receive:
 - Structured telemetry grouped by message types (e.g., GPS, ATT, BAT, ERR)
 - A user question about flight behavior
 
-Your task:
-- Answer clearly and concisely using actual telemetry
-- Detect anomalies or explain uncertainties
-- Use judgment (not hard rules) to spot issues like:
-  • Sudden drops in altitude
-  • Irregular battery usage
-  • Missing GPS fixes
-  • Errors or subsystem faults
+You are not limited to strict rules; instead, reason dynamically. Consider context, time windows, and behavioral consistency when analyzing anomalies or drawing conclusions. Recognize that thresholds can vary across aircraft, mission profiles, and flight phases.
 
-If needed, mention:
-- When data is incomplete or inconclusive
-- Any patterns that suggest risks or unsafe behavior
+Reference Guidelines:
+1. Message Types and Interpretations:
+   - GPS: Global position and satellite info
+     * NSats: Number of satellites (nominal 6–12)
+     * HDop: Horizontal dilution of precision (good <2.0, tolerable <5.0)
+     * Alt: Altitude in meters (evaluate in context of baro vs GPS vs descent/ascent)
 
-Be technical, factual, and helpful — like reporting to a flight safety officer.
+   - ATT: Attitude dynamics
+     * Roll, Pitch, Yaw in radians (dynamic stability more important than fixed thresholds)
+
+   - BAT: Battery metrics
+     * Volt, Curr, Remaining (%); consider voltage sag under load, recovery after demand
+     * Pay attention to trends, not just absolute drops
+
+   - ERR: Error codes
+     * ECode/Subsys: Interpret within operational sequence; some messages may be benign or transient
+
+2. Analytical Approach:
+   - Prioritize trends, rate-of-change, and systemic inconsistencies
+   - Avoid fixed thresholds (e.g., "drop > 10m in 1s") unless justified by supporting context
+   - Assess interdependencies (e.g., GPS degradation during attitude spikes or current surge during drop)
+
+Your analysis must be structured as follows:
+
+BRIEF SUMMARY (always respond with this first)
+   - In 2–3 sentences, offer a clear verdict: Was the flight stable, did any major anomaly occur, and what stands out?
+
+EXECUTIVE SUMMARY
+   • High-level narrative of the flight
+   • Key anomalies or flags
+   • Risk assessment and flight safety verdict
+
+DETAILED ANALYSIS
+   a) GPS & Positioning
+      - Describe consistency or disruptions in GPS data
+      - Comment on number of satellites, HDop trends, altitude behaviors
+      - Interpret positional stability or deviation from expected path
+
+   b) Battery & Power
+      - Observe current draw and voltage behavior over flight phases
+      - Highlight signs of overdraw, poor recovery, or critical depletion
+      - Assess power system reliability
+
+   c) Attitude & Dynamics
+      - Comment on roll/pitch/yaw consistency
+      - Detect control instability, unusual oscillations, or diverging responses
+      - Link with external conditions (wind, GPS loss, manual input)
+
+   d) Errors & System Messages
+      - List relevant ERR messages and potential implications
+      - Distinguish between critical failures vs transient notices
+
+ANOMALY DETECTION
+   • Discuss irregularities that deviate from normal operational patterns
+   • Focus on trends (e.g., gradually increasing battery sag, sudden GPS drop)
+   • Reason about what is *unusual* relative to expected UAV behavior
+
+CORRELATION ANALYSIS
+   • Analyze interrelated issues (e.g., altitude drop following current surge)
+   • Note if one anomaly likely caused another (cause-effect reasoning)
+   • Consider temporal proximity and subsystem relationships
+
+RECOMMENDATIONS
+   a) Immediate Actions
+      - What should be addressed before next flight?
+
+   b) Preventive Measures
+      - What maintenance, calibration, or tuning is advisable?
+
+   c) Further Investigation
+      - What data needs review or flight testing?
+
+   d) References
+      - Refer to any ArduPilot documentation or log interpretation resources
+
+Formatting Rules:
+- Use numbered and lettered sections only (1, 2... a, b...)
+- Use bullet points (•) and dashes (-) as needed
+- DO NOT use any markdown symbols, including **, __, #, *, or backticks (`).
+- Use plain text formatting only. Do NOT use bold, italics, or headings.
+- For section headings, use normal capital letters (e.g., "1. BRIEF SUMMARY").
+
+Your goal: Be technically deep, situationally aware, and guidance-oriented.
 """
 
-def extract_samples(messages_dict, max_per_type=10):
-    samples = {}
-    for msg_type, entries in messages_dict.items():
-        samples[msg_type] = entries[:max_per_type]
-    return samples
+# --- Vector Store Globals ---
+index = faiss.IndexFlatL2(EMBEDDING_DIM)
+chunk_texts = []
 
+# --- Embedding Function ---
+def embed_text(text):
+    response = openai.Embedding.create(input=text, model=EMBEDDING_MODEL)
+    # time.sleep(1.1)  # Prevent API rate limit
+    return response['data'][0]['embedding']
 
-# ========== ANOMALY CHECKERS ==========
+def default_json(obj):
+    if isinstance(obj, bytes):
+        return obj.decode("utf-8", errors="replace")  # fallback for decoding
+    if hasattr(obj, "__str__"):
+        return str(obj)
+    return f"<<non-serializable: {type(obj).__name__}>>"
 
-def detect_altitude_spikes(alt_data):
-    anomalies = []
-    for i in range(1, len(alt_data)):
-        t1, alt1 = alt_data[i-1]["TimeUS"], alt_data[i-1].get("Alt", 0)
-        t2, alt2 = alt_data[i]["TimeUS"], alt_data[i].get("Alt", 0)
-        dt = (t2 - t1) / 1e6
-        dalt = alt2 - alt1
-        if abs(dalt) > 10 and dt < 2:
-            anomalies.append({
-                "from_time": t1,
-                "to_time": t2,
-                "altitude_change": dalt,
-                "duration_sec": dt
-            })
-    return anomalies
-
-
-def detect_voltage_drops(bat_data):
-    anomalies = []
-    for i in range(1, len(bat_data)):
-        v1 = bat_data[i-1].get("Volt", 0)
-        v2 = bat_data[i].get("Volt", 0)
-        drop = v1 - v2
-        if drop > 1.5:
-            anomalies.append({
-                "from_volt": v1,
-                "to_volt": v2,
-                "drop": round(drop, 2),
-                "time": bat_data[i].get("TimeUS")
-            })
-    return anomalies
-
-
-def detect_gps_loss(gps_data):
-    losses = []
-    for g in gps_data:
-        if g.get("NSats", 8) < 5 or g.get("HDop", 1) > 3:
-            losses.append(g)
-    return losses
-
-
-def detect_errors(err_data):
-    return [e for e in err_data if e.get("ECode") not in (0, None)]
-
-
-# ========== MAIN CHAT FUNCTION ==========
-def safe_json(obj):
-    def default(o):
-        if hasattr(o, 'tolist'): 
-            return o.tolist()
-        if hasattr(o, '__str__'):
-            return str(o)
-        return o
-    return json.dumps(obj, indent=2, default=default)
-
-def chat_with_log(query: str, parsed_data: dict) -> str:
+# --- Build Vector Store from Log Data ---
+def build_vector_store(parsed_data):
+    global chunk_texts, index
     all_messages = parsed_data.get("messages", {})
-    if not all_messages:
-        return "No telemetry data found in uploaded log."
+    preferred_order = ["ERR", "GPS", "ATT", "BAT", "CTUN", "BARO"]
+    other_keys = [k for k in all_messages.keys() if k not in preferred_order]
+    all_keys = preferred_order + sorted(other_keys)
 
-    query_lower = query.lower()
-    hint_blocks = []
-    relevant_types = set()
+    for msg_type in all_keys:
+        entries = all_messages.get(msg_type, [])
+        for i in range(0, len(entries), 100):
+            chunk_entries = entries[i:i + 100]
+            chunk_text = f"== {msg_type} CHUNK ==\n" + json.dumps(chunk_entries[:10], default=default_json)
+            embedding = embed_text(chunk_text)
+            index.add(np.array([embedding], dtype=np.float32))
+            chunk_texts.append(chunk_text)
 
-    # === Smart Anomaly Hints ===
-    if "altitude" in query_lower and "CTUN" in all_messages:
-        relevant_types.add("CTUN")
-        spikes = detect_altitude_spikes(all_messages["CTUN"])
-        if spikes:
-            hint_blocks.append(f"⚠️ **Altitude Anomalies:**\n{safe_json(spikes[:3])}")
+# --- Retrieve Most Relevant Chunks Based on User Query ---
+def retrieve_relevant_chunks(query, top_k=3):
+    query_embedding = embed_text(query)
+    D, I = index.search(np.array([query_embedding], dtype=np.float32), top_k)
+    results = []
+    for score, i in zip(D[0], I[0]):
+        if i < len(chunk_texts):
+            results.append((score, chunk_texts[i]))
+    return results
 
-    if "voltage" in query_lower and "BAT" in all_messages:
-        relevant_types.add("BAT")
-        drops = detect_voltage_drops(all_messages["BAT"])
-        if drops:
-            hint_blocks.append(f"⚠️ **Voltage Drops:**\n{safe_json(drops[:3])}")
+# --- Chat Function with RAG ---
+def chat_with_log(query: str, parsed_data: dict, chat_history: list = None) -> str:
+    if chat_history is None:
+        chat_history = []
 
-    if "gps" in query_lower and "GPS" in all_messages:
-        relevant_types.add("GPS")
-        losses = detect_gps_loss(all_messages["GPS"])
-        if losses:
-            hint_blocks.append(f"⚠️ **GPS Signal Issues:**\n{safe_json(losses[:3])}")
+    if not chunk_texts or index.ntotal == 0:
+        print("\n==>Building vector store<==\n")
+        build_vector_store(parsed_data)
+        print("\n==>Vector store built successfully.<==\n")
 
-    if "error" in query_lower and "ERR" in all_messages:
-        relevant_types.add("ERR")
-        errors = detect_errors(all_messages["ERR"])
-        if errors:
-            hint_blocks.append(f"⚠️ **Subsystem Errors:**\n{safe_json(errors[:5])}")
+    relevant_chunks = retrieve_relevant_chunks(query)
+    context = "\n\n".join([chunk for _, chunk in relevant_chunks])
+    
+    print("\n Top Matching Chunks for Query:")
+    for idx, (score, chunk) in enumerate(relevant_chunks):
+        preview = chunk.split("\n")[0] 
+        print(f"  {idx+1}. {preview}  (distance: {score:.4f})")
 
-    # Fallback: if no relevant types found, show just 2-3 core types
-    if not relevant_types:
-        core = ["GPS", "BAT", "ATT"]
-        relevant_types.update([t for t in core if t in all_messages])
+    prompt = f"""You are a UAV flight log assistant.
 
-    # === Compact Sample Section ===
-    telemetry_preview = ""
-    for msg_type in relevant_types:
-        entries = all_messages.get(msg_type, [])[:3]
-        if entries:
-            telemetry_preview += f"\n\n📘 **{msg_type} Sample:**\n{safe_json(entries)}"
+User question: \"{query}\"
 
-    # === Prompt Assembly ===
-    prompt = f"""You are a flight log analysis assistant.
+Here are relevant telemetry chunks:
+{context}
 
-User query: {query}
+Please answer in detail using the following format:
 
-Available message types: {list(all_messages.keys())}
-{"".join(["\n\n" + h for h in hint_blocks])}
+1. Executive Summary
+2. Detailed Analysis
+3. Anomaly Detection
+4. Correlation Analysis
+5. Recommendations
 
-=== Telemetry Samples ===
-{telemetry_preview}
+Formatting Rules:
+- Use numbered and lettered sections only (1, 2... a, b...)
+- Use bullet points (•) and dashes (-) as needed
+- Do not strictly use markdown symbols (e.g., do not use **, ##, etc.)
+
+Your goal: Be technically deep, situationally aware, and guidance-oriented.
 """
 
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4-turbo",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
+                *chat_history,
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.4
+            temperature=0.4,
+            max_tokens=3000
         )
         return response['choices'][0]['message']['content']
     except Exception as e:
         return f"Error: {str(e)}"
+
+
+def compute_flight_risk(parsed_data):
+    score = 0
+    details = []
+    messages = parsed_data.get("messages", {})
+
+    # --- GPS Risk ---
+    gps_data = messages.get("GPS", [])
+    gps_issues = [
+        g for g in gps_data if g.get("NSats", 8) < 5 or g.get("HDop", 1) > 3
+    ]
+    if gps_issues:
+        score += 40
+        details.append("GPS signal quality issues detected (low NSats or high HDop).")
+
+    # --- Battery Voltage Drop ---
+    bat_data = messages.get("BAT", [])
+    for i in range(1, len(bat_data)):
+        v1 = bat_data[i-1].get("Volt", 0)
+        v2 = bat_data[i].get("Volt", 0)
+        if v1 - v2 > 1.5:
+            score += 30
+            details.append("Significant battery voltage drop detected.")
+            break
+
+    # --- Subsystem Errors ---
+    err_data = messages.get("ERR", [])
+    err_codes = [e for e in err_data if e.get("ECode") not in (0, None)]
+    if err_codes:
+        score += 50
+        details.append(f"{len(err_codes)} critical error messages found in ERR logs.")
+
+    # --- Altitude Spikes ---
+    ctun_data = messages.get("CTUN", [])
+    for i in range(1, len(ctun_data)):
+        alt1 = ctun_data[i-1].get("Alt", 0)
+        alt2 = ctun_data[i].get("Alt", 0)
+        if abs(alt2 - alt1) > 10:
+            score += 20
+            details.append("Sudden altitude fluctuation (>10m) detected.")
+            break
+
+    # --- Risk Interpretation ---
+    if score <= 30:
+        risk_level = "Low"
+    elif score <= 60:
+        risk_level = "Moderate"
+    else:
+        risk_level = "High"
+
+    return {
+        "score": score,
+        "riskLevel": risk_level,
+        "details": details
+    }

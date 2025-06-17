@@ -2,11 +2,16 @@ from dotenv import load_dotenv
 import os
 
 load_dotenv()
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from chat.agent import chat_with_log
-from parser.mavlog_parser import parse_log_file
+from chat.agent import chat_with_log, compute_flight_risk
+from telemetry_parser.mavlog_parser import parse_log_file
 import uuid
+
+# main.py or chat_store.py
+from collections import defaultdict
+
+
 
 print("Loaded API key:", os.getenv("OPENAI_API_KEY"))
 
@@ -21,6 +26,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# session_id => list of messages
+chat_histories = {}  
+
+
 session_logs = {}
 
 @app.post("/upload")
@@ -33,21 +42,44 @@ async def upload_log(file: UploadFile = File(...)):
         f.write(contents)
     parsed_data = parse_log_file(filepath)
     session_logs[session_id] = parsed_data
-    return {"session_id": session_id, "message": "Log parsed successfully."}
+    chat_histories[session_id] = []
+
+    return {"sessionNum": session_id, "message": "Log parsed successfully."}
+
 
 @app.post("/chat")
-def chat(session_id: str = Form(...), query: str = Form(...)):
-    try:
-        parsed = session_logs.get(session_id)
-        if not parsed:
-            return {"error": "Invalid session ID"}
+async def chat(sessionNum: str = Form(...), query: str = Form(...)):
+    parsed = session_logs.get(sessionNum)
+    if not parsed:
+        raise HTTPException(status_code=400, detail="Invalid or expired session ID")
 
-        response = chat_with_log(query, parsed)
-        return {"response": response}
+    history = chat_histories.setdefault(sessionNum, [])
 
-    except Exception as e:
-        import traceback
-        print(traceback.format_exc())
-        return {"error": f"Exception occurred: {str(e)}"}
+    trimmed_history = history[-2:]
+    
+    # print(f"Session: {sessionNum}")
+    # print(f"Chat history so far: {trimmed_history}")
+
+    messages = trimmed_history  + [{"role": "user", "content": query}]
+
+    response_text = chat_with_log(query, parsed, messages)
+
+    # Update history
+    history.append({"role": "user", "content": query})
+    history.append({"role": "assistant", "content": response_text})
+
+    return {
+        "response": response_text,
+        "sessionNum": sessionNum
+    }
+
+
+@app.post("/risk_score")
+async def risk_score(sessionNum: str = Form(...)):
+    parsed = session_logs.get(sessionNum)
+    if not parsed:
+        return {"error": "Invalid session number"}
+    risk = compute_flight_risk(parsed)
+    return risk
 
 
