@@ -1,126 +1,117 @@
 # UAVLogview-withChatbot
 
-This is an enhanced fork of the original [UAV Log Viewer](https://plot.ardupilot.org/) that integrates an **AI-powered chatbot assistant** capable of understanding and reasoning about parsed MAVLink `.BIN` flight logs.
+This is an enhanced fork of the original [UAV Log Viewer](https://plot.ardupilot.org/) that integrates an **AI-powered chatbot assistant** capable of understanding and reasoning about parsed MAVLink `.BIN` flight logs using Retrieval-Augmented Generation (RAG).
 
 ---
 
 ## 🔧 Project Structure
 
+```
 UAVLogview-withChatbot/
-├── UAVLogViewer/ # Vue-based log visualization tool
-├── chatbot_backend/ # FastAPI server handling chatbot and log parsing
+├── UAVLogViewer/       # Vue-based log visualization tool
+├── chatbot_backend/    # FastAPI + RAG backend for chat and analysis
+```
 
 ---
 
-## ✨ Features
+## ✨ Key Features
 
-- Upload and analyze `.BIN` UAV flight logs.
-- Beautiful log visualization using Plotly & Cesium.
-- Chatbot with LLM (OpenAI or compatible) support.
-- Agentic anomaly detection and reasoning on flight data.
-- Interactive Q&A:
+- 📤 Upload and analyze `.BIN` UAV flight logs
+- 📊 Interactive 3D visualization (Cesium, Plotly)
+- 🤖 LLM-powered chatbot that:
+  - Understands ArduPilot log structures
+  - Performs anomaly detection (GPS loss, battery sag, altitude spikes)
+  - Provides system-level diagnostics and explanations
+  - Leverages OpenAI embeddings and FAISS for RAG-based retrieval
+- 🔍 Sample Queries:
   - "What was the max altitude?"
   - "When was the first GPS loss?"
-  - "Were there critical mid-flight errors?"
+  - "Any critical mid-flight errors?"
   - "How long did the flight last?"
-  - "Did RC signal drop at any point?"
+  - "Did RC signal drop?"
 
 ---
 
 ## 🖥️ Frontend Setup (Vue.js)
 
 ### Prerequisites
-
 - Node.js v14 or later
 - npm
 
 ### Install & Run
-
 ```bash
 cd UAVLogViewer
 npm install
 npm run dev
 ```
-Access the frontend at: http://localhost:8080
+Access the frontend at: [http://localhost:8080](http://localhost:8080)
 
-##  🧠 Backend Setup (FastAPI + Python)
+---
 
-Prerequisites:
-Python 3.9+
-pip
+## 🧠 Backend Setup (FastAPI + RAG + OpenAI)
 
-Install & Run:
+### Prerequisites
+- Python 3.9+
+- pip
 
+### Install & Run
 ```bash
 cd chatbot_backend
 python -m venv venv
-```
-
-# Activate the virtual environment:
 
 # On Windows:
-```bash
 venv\Scripts\activate
-python -m uvicorn main:app --reload
-```
+
 # On Mac/Linux:
-```bash
 source venv/bin/activate
 
 pip install -r requirements.txt
-
 uvicorn main:app --reload
 ```
-The backend API runs on: http://localhost:8000
+Backend runs at: [http://localhost:8000](http://localhost:8000)
 
-📤 Upload + Chatbot Flow
-Launch both the UAVLogViewer and chatbot_backend.
+---
 
-In the UI, locate the Chatbot (bottom-right).
+## 🤖 AI Flow (RAG Architecture)
 
-First, upload a .BIN flight log.
+- Parsed `.BIN` logs are chunked into 100-line telemetry segments
+- Chunks are embedded using OpenAI `text-embedding-3-small`
+- FAISS stores embeddings locally in-memory for fast similarity search
+- User query is embedded and matched to top-K relevant chunks
+- Contextual chunks + query are sent to GPT-4 for final reasoning
 
-Then, ask questions about the flight.
+---
 
-🧠 API Endpoints
-Method	Endpoint	Description
-POST	/upload	Uploads the .BIN log file
-POST	/chat	Sends queries to the chatbot (LLM)
+## 🚀 API Endpoints
 
-🧪 Example Chatbot Queries
-"What was the highest altitude reached?"
+| Method | Endpoint  | Description                     |
+|--------|-----------|---------------------------------|
+| POST   | /upload   | Uploads the `.BIN` log file     |
+| POST   | /chat     | Sends a query to the chatbot    |
 
-"Were there any GPS signal losses?"
+---
 
-"How long did the flight last?"
+## 🧪 Example Questions
+- "What altitude spikes occurred?"
+- "Any GPS signal anomalies?"
+- "Show subsystem errors mid-flight"
+- "Highlight unusual battery behavior"
+- "Was the flight stable?"
 
-"What battery voltage drops were recorded?"
+---
 
-"List all critical subsystem errors mid-flight."
+## 🧰 Tech Stack
+- **Frontend**: Vue.js, Cesium, Plotly, Webpack
+- **Backend**: FastAPI, FAISS, OpenAI, Pydantic
+- **LLM Integration**: GPT-4 Turbo via OpenAI API
+- **Vector Search**: FAISS + embeddings (1536-dim)
+- **Others**: ESLint, Babel, Axios, CORS
 
-"Spot any unusual flight behavior?"
+---
 
-🤖 AI Integration Notes
-Uses OpenAI/GPT or compatible LLM API.
+## 📁 Forked From
+[https://github.com/ArduPilot/UAVLogViewer](https://github.com/ArduPilot/UAVLogViewer)
 
-Dynamically interprets MAVLink data and infers anomalies.
-
-Encourages reasoning (not hard-coded rules).
-
-Prompts hint at patterns, inconsistencies, thresholds, etc.
-
-🧰 Technologies Used
-Frontend: Vue.js, Webpack, Cesium, Plotly
-
-Backend: FastAPI, Pydantic
-
-LLM API: OpenAI (or equivalent)
-
-ESLint, Babel, Axios
-
-📁 Forked From
-https://github.com/ArduPilot/UAVLogViewer
-
-👤 Author
-Kavish14
-GitHub: @Kavish14-github
+## 👤 Author
+**Kavish14**
+GitHub: [@Kavish14-github](https://github.com/Kavish14-github)

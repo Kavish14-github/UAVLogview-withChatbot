@@ -7,11 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from chat.agent import chat_with_log, compute_flight_risk
 from telemetry_parser.mavlog_parser import parse_log_file
 import uuid
-
-# main.py or chat_store.py
 from collections import defaultdict
-
-
 
 print("Loaded API key:", os.getenv("OPENAI_API_KEY"))
 
@@ -63,8 +59,6 @@ async def chat(sessionNum: str = Form(...), query: str = Form(...)):
     messages = trimmed_history  + [{"role": "user", "content": query}]
 
     response_text = chat_with_log(query, parsed, messages)
-
-    # Update history
     history.append({"role": "user", "content": query})
     history.append({"role": "assistant", "content": response_text})
 
